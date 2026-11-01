@@ -1,5 +1,5 @@
 -- ==============================================================================
--- DLMDSEDE02 - Task 1: PostgreSQL Schema Definition
+-- PostgreSQL Schema Definition
 -- Database: feature_store
 -- ==============================================================================
 
