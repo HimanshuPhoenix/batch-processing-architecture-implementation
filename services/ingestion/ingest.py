@@ -1,5 +1,5 @@
 """
-DLMDSEDE02 - Task 1: Batch Ingestion Microservice
+Batch Ingestion Microservice
 Generates / ingests 1,000,000+ timestamped trip records, converts to Parquet,
 uploads to local S3-compatible MinIO object store, and logs batch audit metadata to PostgreSQL.
 """
@@ -13,9 +13,7 @@ import pandas as pd
 import psycopg2
 from minio import Minio
 
-# ------------------------------------------------------------------------------
 # Configuration & Environment Variables
-# ------------------------------------------------------------------------------
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minio_admin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minio_password")

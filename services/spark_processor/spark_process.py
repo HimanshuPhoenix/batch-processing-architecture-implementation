@@ -1,5 +1,5 @@
 """
-DLMDSEDE02 - Task 1: Apache Spark Batch Processing Engine
+Apache Spark Batch Processing Engine
 Reads raw Parquet files from S3/MinIO, executes quarterly aggregation feature engineering,
 and writes aggregated feature metrics into PostgreSQL for downstream ML training.
 """
@@ -10,9 +10,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from sqlalchemy import create_engine
 
-# ------------------------------------------------------------------------------
 # Environment Variables & Connections
-# ------------------------------------------------------------------------------
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minio_admin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minio_password")

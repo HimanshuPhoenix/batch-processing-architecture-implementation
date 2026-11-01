@@ -1,5 +1,5 @@
 """
-DLMDSEDE02 - Task 1: Feature Delivery REST API Microservice (FastAPI)
+Feature Delivery REST API Microservice (FastAPI)
 Provides low-latency REST endpoints to deliver quarterly feature aggregations
 to downstream machine learning training applications.
 """
@@ -12,14 +12,12 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 app = FastAPI(
-    title="DLMDSEDE02 - Feature Store Delivery API",
+    title="Feature Store Delivery API",
     description="Delivers quarterly batch feature aggregations to ML model training applications.",
     version="1.0.0"
 )
 
-# ------------------------------------------------------------------------------
 # Configuration
-# ------------------------------------------------------------------------------
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "postgres")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "feature_store")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "db_user")
