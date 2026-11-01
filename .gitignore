@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# Data & Environment
+.env
+*.parquet
+*.csv
+.DS_Store
+
+# Docker
+postgres_data/
+minio_data/
