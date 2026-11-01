@@ -7,9 +7,7 @@ volumes:
   minio_data:
 
 services:
-  # ----------------------------------------------------------------------------
   # 1. Relational Metadata & Feature Store (PostgreSQL)
-  # ----------------------------------------------------------------------------
   postgres:
     image: postgres:15-alpine
     container_name: de_postgres
@@ -31,9 +29,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # ----------------------------------------------------------------------------
   # 2. Local S3-Compatible Object Store (Elestio MinIO Mirror)
-  # ----------------------------------------------------------------------------
   minio:
     image: elestio/minio:latest
     container_name: de_minio
@@ -55,9 +51,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # ----------------------------------------------------------------------------
   # 3. Data Ingestion Microservice (Python ETL)
-  # ----------------------------------------------------------------------------
   ingestion:
     build:
       context: ./services/ingestion
@@ -72,9 +66,7 @@ services:
     networks:
       - data-net
 
-  # ----------------------------------------------------------------------------
   # 4. Batch Processing Engine (Apache Spark / PySpark)
-  # ----------------------------------------------------------------------------
   spark-processor:
     build:
       context: ./services/spark_processor
@@ -89,9 +81,7 @@ services:
     networks:
       - data-net
 
-  # ----------------------------------------------------------------------------
   # 5. Feature Delivery REST API (FastAPI)
-  # ----------------------------------------------------------------------------
   api:
     build:
       context: ./services/api
