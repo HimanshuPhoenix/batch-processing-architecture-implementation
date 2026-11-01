@@ -24,7 +24,7 @@ def create_spark_session():
     """Initializes PySpark Session configured for local MinIO S3 access."""
     print("[SPARK] Initializing PySpark Session...")
     spark = SparkSession.builder \
-        .appName("DLMDSEDE02-QuarterlyFeatureAggregator") \
+        .appName("QuarterlyFeatureAggregator") \
         .master("local[*]") \
         .config("spark.driver.memory", "2g") \
         .config("spark.sql.shuffle.partitions", "8") \
@@ -104,7 +104,7 @@ def process_batch_aggregations():
     res_pd.to_sql(
         "quarterly_feature_aggregations",
         con=engine,
-        if_exists="append",
+        if_exists="replace",
         index=False,
         method="multi"
     )
