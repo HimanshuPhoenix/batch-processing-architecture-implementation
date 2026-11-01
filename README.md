@@ -73,8 +73,8 @@ The pipeline ingests, validates, stores, transforms, and delivers features deriv
 ### Execution Steps
 ```bash
 # 1. Clone the repository
-git clone <your-repository-url>
-cd dlmdsede02-batch-pipeline
+git clone https://github.com/HimanshuPhoenix/batch-processing-architecture-implementation.git
+cd batch-processing-architecture-implementation
 
 # 2. Configure environment variables
 cp .env.example .env
