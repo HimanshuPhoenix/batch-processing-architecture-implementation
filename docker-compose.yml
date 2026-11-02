@@ -8,6 +8,7 @@ volumes:
 
 services:
   # 1. Relational Metadata & Feature Store (PostgreSQL)
+
   postgres:
     image: postgres:15-alpine
     container_name: de_postgres
@@ -28,8 +29,14 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
 
-  # 2. Local S3-Compatible Object Store (Elestio MinIO Mirror)
+  # 2. Local S3-Compatible Object Store (Pinned MinIO Release)
+
   minio:
     image: elestio/minio:latest
     container_name: de_minio
@@ -50,8 +57,15 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+
 
   # 3. Data Ingestion Microservice (Python ETL)
+
   ingestion:
     build:
       context: ./services/ingestion
@@ -65,8 +79,15 @@ services:
       - .env
     networks:
       - data-net
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+
 
   # 4. Batch Processing Engine (Apache Spark / PySpark)
+
   spark-processor:
     build:
       context: ./services/spark_processor
@@ -80,8 +101,15 @@ services:
       - .env
     networks:
       - data-net
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 3G
+
 
   # 5. Feature Delivery REST API (FastAPI)
+
   api:
     build:
       context: ./services/api
@@ -103,3 +131,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M

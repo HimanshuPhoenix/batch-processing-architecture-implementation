@@ -6,7 +6,7 @@
 
 This repository contains the complete, reproducible source code for an end-to-end **Batch-Processing Data Architecture** designed to support scheduled quarterly feature engineering for a downstream Machine Learning (ML) model training application.
 
-The pipeline ingests, validates, stores, transforms, and delivers features derived from an open dataset containing **over 1,000,000 time-referenced records** (*NYC Yellow Taxi Trip Dataset*). The system is fully containerized using **Docker** microservices, orchestrated via **Docker Compose**, and configured for zero-cloud local execution.
+The ingestion service generates a reproducible synthetic dataset modeled on **NYC Yellow Taxi trip attributes**, containing **over 1,000,000 timestamped records** to enable deterministic, reproducible testing of large-scale batch processing. The system is fully containerized using **Docker** microservices, orchestrated via **Docker Compose**, and configured for zero-cloud local execution.
 
 ---
 
@@ -16,51 +16,56 @@ The pipeline ingests, validates, stores, transforms, and delivers features deriv
 
 ```
                   +----------------------------------------------+
-                  |  Kaggle Timestamped Dataset (>=1M Records)   |
+                  |  Reproducible Synthetic Dataset (>=1M Rows)  |
+                  |     - NYC Yellow Taxi Schema & Timestamps    |
                   +----------------------------------------------+
                                          |
                                          v
                   +----------------------------------------------+
                   |   Data Ingestion Microservice (Python ETL)   |
-                  |     - Schema Validation & Timestamp Check    |
+                  |     - Schema & Timestamp Validation Checks   |
+                  |     - Exponential Backoff Retries            |
                   +----------------------------------------------+
                                /                   \
                               /                     \
                              v                       v
       +-------------------------------+   +-------------------------------+
       | MinIO Object Storage (S3 API) |   | PostgreSQL Relational DB      |
-      |   - Raw Snappy Parquet Files  |   |   - Audit Ingestion Logs      |
-      |   - Partitioned by Year/Month |   |   - Relational Metadata       |
+      |   - Snappy Parquet Files      |   |   - Audit Ingestion Logs      |
+      |   - Hive Partitioned (Y/M)    |   |   - Relational Metadata       |
       +-------------------------------+   +-------------------------------+
                              \                       /
                               \                     /
                                v                   v
                   +----------------------------------------------+
-                  | Apache Spark Engine (PySpark Processing)     |
-                  |   - Batch Transformations & Cleaning        |
-                  |   - Quarterly Feature Aggregations           |
+                  | Apache Spark Engine (PySpark Native S3A)     |
+                  |   - Direct Parallel Parquet S3A Reading     |
+                  |   - Quarterly Feature Engineering Aggs       |
+                  |   - Idempotent PostgreSQL UPSERT             |
                   +----------------------------------------------+
                                          |
                                          v
                   +----------------------------------------------+
                   | PostgreSQL Feature Store                     |
                   |   - Table: quarterly_feature_aggregations    |
+                  |   - Indexes & Unique Constraints Preserved   |
                   +----------------------------------------------+
                                          |
                                          v
                   +----------------------------------------------+
                   | Feature Delivery REST API (FastAPI)          |
+                  |   - Connection Pooling & Query Pagination    |
                   |   - GET /api/v1/features                     |
                   |   - Served to Downstream ML Application      |
                   +----------------------------------------------+
 ```
 
 ### Microservice Roles & Components:
-1. **Ingestion Service (`de_ingestion`):** Fetches/generates 1,000,000+ time-referenced records, validates schema integrity, converts raw data into Snappy-compressed Parquet files, uploads them to local MinIO storage via the S3 API, and logs execution metadata to PostgreSQL.
-2. **Object Store (`de_minio`):** Local, S3-compatible MinIO container housing raw partitioned Parquet datasets (`raw-data` bucket).
-3. **Database & Feature Store (`de_postgres`):** PostgreSQL container acting as both the audit logger and the final feature store for aggregated metrics (`quarterly_feature_aggregations`).
-4. **Processing Engine (`de_spark_processor`):** Apache Spark (PySpark) container executing quarterly feature engineering, group-by aggregations (average distance, fare, tip, revenue), and automated loading to PostgreSQL.
-5. **Feature Delivery API (`de_fastapi`):** FastAPI REST application exposing low-latency HTTP endpoints (`/api/v1/features`) for downstream ML training applications.
+1. **Ingestion Service (`de_ingestion`):** Generates 1,000,000+ time-referenced records, executes explicit schema integrity & timestamp validation checks, converts data into Hive-partitioned Snappy-compressed Parquet files (`yellow_taxi_2023/year=YYYY/month=MM/`), uploads them to local MinIO storage via S3 API with exponential backoff retries, and logs execution audit metadata to PostgreSQL.
+2. **Object Store (`de_minio`):** Local, S3-compatible MinIO container housing raw partitioned Parquet datasets (`raw-data` bucket), pinned to a tested release version (`minio/minio:RELEASE.2023-09-20T22-40-07Z`).
+3. **Database & Feature Store (`de_postgres`):** PostgreSQL container acting as both audit logger and final feature store (`quarterly_feature_aggregations`), utilizing primary keys, unique constraints, and indexes.
+4. **Processing Engine (`de_spark_processor`):** Apache Spark (PySpark) container reading Parquet files directly from MinIO using native Hadoop S3A connector, executing quarterly feature engineering, group-by aggregations, and performing an idempotent UPSERT (`ON CONFLICT DO UPDATE`) to PostgreSQL.
+5. **Feature Delivery API (`de_fastapi`):** FastAPI REST application with connection pooling, query pagination, and secure exception handling exposing low-latency HTTP endpoints (`/api/v1/features`) for downstream ML training applications.
 
 ---
 
@@ -104,8 +109,8 @@ Returns the status of the API and database connectivity.
 }
 ```
 
-### `GET /api/v1/features?quarter=2023-Q1&vendor_id=1`
-Retrieves quarterly aggregated feature vectors for ML model training.
+### `GET /api/v1/features?quarter=2023-Q1&vendor_id=1&limit=10&offset=0`
+Retrieves quarterly aggregated feature vectors for ML model training with pagination support.
 ```json
 [
   {
@@ -122,26 +127,15 @@ Retrieves quarterly aggregated feature vectors for ML model training.
 
 ---
 
-## 5. Architecture Scaling & Performance Optimization
+## 5. Architectural Improvements & Reliability Enhancements
 
-*(Addressing Professor Max Pumperla's feedback on handling volume growth and system scalability)*
-
-To ensure this batch-processing architecture transitions seamlessly from local execution to production-grade data volumes (100M+ records), the following scaling strategies are designed into the pipeline:
-
-### 1. Storage Layer Scaling (MinIO Object Store)
-* **Parquet Columnar Format & Compression:** Raw CSV inputs are immediately converted into Snappy-compressed Parquet files, reducing disk footprint by ~75% and accelerating columnar reads during Spark queries.
-* **Partition Pruning:** Parquet object keys are partitioned by year and month (`/raw-data/year=YYYY/month=MM/`), enabling Spark to prune irrelevant partitions during query execution rather than scanning full datasets.
-
-### 2. Processing & Compute Scaling (Apache Spark)
-* **Horizontal Cluster Scale-Out:** The PySpark engine can scale from local standalone mode (`local[*]`) to a multi-node Spark executor cluster managed by Kubernetes or YARN, eliminating single-node driver OOM bottlenecks.
-* **Shuffle Partition Tuning:** `spark.sql.shuffle.partitions` and executor memory limits are dynamically set to balance cluster parallelism during heavy quarterly group-by operations.
-
-### 3. Database & Feature Store Scaling (PostgreSQL)
-* **Declarative Range Partitioning:** The `quarterly_feature_aggregations` table is indexed on `(vendor_id, year_quarter)` and can be partitioned by range (`year`) in PostgreSQL to maintain sub-millisecond query performance as table size grows.
-* **In-Memory Caching Tier (Redis):** A Redis caching layer can be introduced between PostgreSQL and FastAPI to cache frequent quarterly feature requests, protecting the relational database under high concurrent load.
-
-### 4. API & Orchestration Scaling (FastAPI & Docker)
-* **Asynchronous Workers & Load Balancing:** FastAPI instances run with multiple Uvicorn worker threads behind an NGINX reverse proxy, while Docker Compose defines explicit CPU and memory reservations (`deploy.resources`) to prevent resource contention.
+1. **Explicit Data & Schema Validation:** `ingest.py` executes schema column presence checks, null checks, non-negative range checks, and datetime sanity checks (`pickup_datetime <= dropoff_datetime`) before formatting data for storage.
+2. **Hive-Partitioned Parquet Storage:** Data is uploaded to MinIO using Hive partition keys (`yellow_taxi_2023/year=YYYY/month=MM/`), enabling Spark partition pruning and optimized parallel reads.
+3. **Native PySpark S3A Processing:** Spark reads raw Parquet objects directly from MinIO using the Hadoop S3A connector without loading data into Python driver memory.
+4. **Idempotent PostgreSQL UPSERT:** Aggregations write to PostgreSQL using `ON CONFLICT (vendor_id, year_quarter) DO UPDATE`, preserving SQL schema constraints, primary keys, and indexes.
+5. **Fault Tolerance & Retries:** Ingestion microservice incorporates exponential backoff retries (`execute_with_retry`) for MinIO S3 streaming and PostgreSQL logging.
+6. **API Performance & Security:** FastAPI uses `ThreadedConnectionPool` for database access, query pagination (`limit`/`offset`), and masks internal SQL exceptions from external clients.
+7. **Container Security & Resource Governance:** Docker containers execute under dedicated non-root users (`USER appuser`), pin MinIO release tags, and specify explicit CPU and memory resource limits in `docker-compose.yml`.
 
 ---
 
@@ -149,22 +143,22 @@ To ensure this batch-processing architecture transitions seamlessly from local e
 
 ```
 .
-├── docker-compose.yml           # Microservice orchestration manifest
+├── docker-compose.yml           # Microservice orchestration manifest with resource limits
 ├── .env.example                 # Sample environment configuration
 ├── .gitignore                   # Git exclusion rules
-├── README.md                    # Technical documentation & scaling guide
+├── README.md                    # Technical documentation & architecture guide
 ├── sql/
-│   └── schema.sql               # PostgreSQL DDL tables & indexes
+│   └── schema.sql               # PostgreSQL DDL tables, constraints & indexes
 └── services/
-    ├── ingestion/               # Python ETL microservice (1M+ rows -> Parquet -> MinIO)
+    ├── ingestion/               # Python ETL microservice (Validation, Hive Parquet, Retries)
     │   ├── Dockerfile
     │   ├── requirements.txt
     │   └── ingest.py
-    ├── spark_processor/         # PySpark batch aggregation microservice
+    ├── spark_processor/         # PySpark batch aggregation microservice (Native S3A, UPSERT)
     │   ├── Dockerfile
     │   ├── requirements.txt
     │   └── spark_process.py
-    └── api/                     # FastAPI feature delivery REST microservice
+    └── api/                     # FastAPI feature delivery microservice (Pooling, Pagination, Security)
         ├── Dockerfile
         ├── requirements.txt
         └── main.py
