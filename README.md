@@ -24,7 +24,7 @@ The ingestion service generates a reproducible synthetic dataset modeled on **NY
                   +----------------------------------------------+
                   |   Data Ingestion Microservice (Python ETL)   |
                   |     - Schema & Timestamp Validation Checks   |
-                  |     - Exponential Backoff Retries            |
+                  |     - Incremental Backoff Retries            |
                   +----------------------------------------------+
                                /                   \
                               /                     \

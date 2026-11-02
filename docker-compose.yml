@@ -14,9 +14,9 @@ services:
     container_name: de_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: feature_store
-      POSTGRES_USER: db_user
-      POSTGRES_PASSWORD: db_password
+      POSTGRES_DB: ${POSTGRES_DB:-feature_store}
+      POSTGRES_USER: ${POSTGRES_USER:-db_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-db_password}
     ports:
       - "5432:5432"
     volumes:
@@ -43,8 +43,8 @@ services:
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minio_admin
-      MINIO_ROOT_PASSWORD: minio_password
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio_password}
     ports:
       - "9000:9000"
       - "9001:9001"
