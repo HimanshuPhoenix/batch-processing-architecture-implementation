@@ -1,9 +1,10 @@
 """
 Apache Spark Batch Processing Engine
-Reads raw Parquet files from S3/MinIO, executes quarterly aggregation feature engineering,
-and writes aggregated feature metrics into PostgreSQL for downstream ML training.
+Reads raw Parquet files directly from S3/MinIO partitioned paths via native Hadoop S3A connector,
+executes quarterly aggregation feature engineering in PySpark, and performs an idempotent
+UPSERT into PostgreSQL preserving schema constraints, primary keys, and indexes.
+Supports distributed execution on a multi-node Spark Standalone cluster via SPARK_MASTER_URL.
 """
-
 import os
 import sys
 from pyspark.sql import SparkSession
@@ -20,28 +21,34 @@ POSTGRES_DB = os.getenv("POSTGRES_DB", "feature_store")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "db_user")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "db_password")
 
+# Multi-node distributed Spark master fallback
+SPARK_MASTER_URL = os.getenv("SPARK_MASTER_URL", "spark://spark-master:7077")
+
+
 def create_spark_session():
-    """Initializes PySpark Session configured for native MinIO S3A direct reading."""
-    print("[SPARK] Initializing PySpark Session with S3A support...")
+    """Initializes PySpark Session configured for native MinIO S3A direct reading & cluster execution."""
+    print(f"[SPARK] Initializing PySpark Session targeting Spark Master at '{SPARK_MASTER_URL}' with S3A support...")
     
     s3a_endpoint = MINIO_ENDPOINT
     if not s3a_endpoint.startswith("http://") and not s3a_endpoint.startswith("https://"):
         s3a_endpoint = f"http://{s3a_endpoint}"
 
-    builder = SparkSession.builder \
-        .appName("DLMDSEDE02-QuarterlyFeatureAggregator") \
-        .master("local[*]") \
-        .config("spark.driver.memory", "2g") \
-        .config("spark.sql.shuffle.partitions", "8") \
-        .config("spark.sql.parquet.datetimeRebaseModeInRead", "CORRECTED") \
-        .config("spark.sql.parquet.int96RebaseModeInRead", "CORRECTED") \
-        .config("spark.hadoop.fs.s3a.endpoint", s3a_endpoint) \
-        .config("spark.hadoop.fs.s3a.access.key", MINIO_ACCESS_KEY) \
-        .config("spark.hadoop.fs.s3a.secret.key", MINIO_SECRET_KEY) \
-        .config("spark.hadoop.fs.s3a.path.style.access", "true") \
-        .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false") \
-        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
+    builder = (
+        SparkSession.builder
+        .appName("QuarterlyFeatureAggregator")
+        .master(SPARK_MASTER_URL)
+        .config("spark.driver.memory", "2g")
+        .config("spark.sql.shuffle.partitions", "8")
+        .config("spark.sql.parquet.datetimeRebaseModeInRead", "CORRECTED")
+        .config("spark.sql.parquet.int96RebaseModeInRead", "CORRECTED")
+        .config("spark.hadoop.fs.s3a.endpoint", s3a_endpoint)
+        .config("spark.hadoop.fs.s3a.access.key", MINIO_ACCESS_KEY)
+        .config("spark.hadoop.fs.s3a.secret.key", MINIO_SECRET_KEY)
+        .config("spark.hadoop.fs.s3a.path.style.access", "true")
+        .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
         .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
+    )
     
     if os.path.exists("/app/jars/hadoop-aws-3.3.4.jar") and os.path.exists("/app/jars/aws-java-sdk-bundle-1.12.262.jar"):
         builder = builder.config("spark.jars", "/app/jars/hadoop-aws-3.3.4.jar,/app/jars/aws-java-sdk-bundle-1.12.262.jar")
@@ -51,6 +58,7 @@ def create_spark_session():
     spark = builder.getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
     return spark
+
 
 def save_features_to_postgres(res_pd, engine):
     """
@@ -95,6 +103,7 @@ def save_features_to_postgres(res_pd, engine):
         conn.execute(upsert_sql, records)
         
     print(f"[SUCCESS] Upserted {len(records)} feature aggregation records into PostgreSQL.")
+
 
 def process_batch_aggregations():
     """Reads Parquet data directly from MinIO partitioned paths using PySpark S3A reader, computes quarterly metrics, and loads to PostgreSQL."""
@@ -145,6 +154,7 @@ def process_batch_aggregations():
 
     print("[SUCCESS] PySpark batch processing pipeline completed successfully.")
     spark.stop()
+
 
 if __name__ == "__main__":
     process_batch_aggregations()

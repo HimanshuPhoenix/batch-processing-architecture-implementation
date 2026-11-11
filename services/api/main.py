@@ -7,6 +7,7 @@ to downstream machine learning training applications.
 import os
 import logging
 from typing import List, Optional
+from datetime import datetime
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
@@ -18,8 +19,9 @@ from psycopg2.extras import RealDictCursor
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("feature_api")
 
+# ------------------------------------------------------------------------------
 # Configuration
-
+# ------------------------------------------------------------------------------
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "postgres")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "feature_store")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "db_user")
@@ -47,9 +49,9 @@ async def lifespan(app: FastAPI):
         db_pool.closeall()
 
 app = FastAPI(
-    title="DLMDSEDE02 - Feature Store Delivery API",
-    description="Delivers quarterly batch feature aggregations to ML model training applications.",
-    version="1.0.0",
+    title="Lambda Architecture Feature Delivery API",
+    description="Delivers quarterly batch & real-time streaming feature aggregations to ML model training applications.",
+    version="1.1.0",
     lifespan=lifespan
 )
 
@@ -61,6 +63,16 @@ class FeatureAggregationSchema(BaseModel):
     avg_fare_amount: float
     avg_tip_amount: float
     total_revenue: float
+
+class RealtimeFeatureSchema(BaseModel):
+    id: int
+    vendor_id: int
+    window_start: datetime
+    window_end: datetime
+    live_trips: int
+    live_avg_fare: Optional[float] = None
+    live_avg_distance: Optional[float] = None
+    created_at: datetime
 
 def get_pooled_connection():
     if not db_pool:
@@ -87,15 +99,15 @@ def health_check():
         if conn:
             release_pooled_connection(conn)
 
-@app.get("/api/v1/features", response_model=List[FeatureAggregationSchema], tags=["Features"])
+@app.get("/api/v1/features", response_model=List[FeatureAggregationSchema], tags=["Batch Features"])
 def get_quarterly_features(
-    vendor_id: Optional[int] = Query(None, description="Filter features by vendor ID (e.g. 1, 2, 3)"),
+    vendor_id: Optional[int] = Query(None, description="Filter features by vendor ID (e.g. 1, 2)"),
     quarter: Optional[str] = Query(None, description="Filter features by quarter (e.g. '2023-Q1')"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of feature records to return"),
     offset: int = Query(0, ge=0, description="Offset for query result pagination")
 ):
     """
-    Retrieves quarterly aggregated feature vectors for ML model training with pagination support.
+    Retrieves quarterly aggregated feature vectors from the Batch Layer with pagination support.
     """
     conn = None
     try:
@@ -124,6 +136,36 @@ def get_quarterly_features(
     except Exception as e:
         logger.error(f"[QUERY ERROR] Exception in get_quarterly_features: {e}")
         raise HTTPException(status_code=500, detail="Internal server error executing feature query.")
+    finally:
+        if conn:
+            release_pooled_connection(conn)
+
+@app.get("/api/v1/features/realtime", response_model=List[RealtimeFeatureSchema], tags=["Streaming Speed Layer"])
+def get_realtime_sliding_window_features(
+    vendor_id: Optional[int] = Query(None, description="Filter streaming features by vendor ID"),
+    limit: int = Query(10, ge=1, le=100, description="Maximum number of streaming window records")
+):
+    """
+    Retrieves the latest 15-minute sliding window aggregations from the Real-Time Streaming Speed Layer.
+    """
+    conn = None
+    try:
+        conn = get_pooled_connection()
+        cursor = conn.cursor()
+        query = "SELECT id, vendor_id, window_start, window_end, live_trips, live_avg_fare, live_avg_distance, created_at FROM realtime_feature_aggregations WHERE 1=1"
+        params = []
+        if vendor_id is not None:
+            query += " AND vendor_id = %s"
+            params.append(vendor_id)
+        query += " ORDER BY window_end DESC LIMIT %s;"
+        params.append(limit)
+        cursor.execute(query, params)
+        records = cursor.fetchall()
+        cursor.close()
+        return records
+    except Exception as e:
+        logger.error(f"[REALTIME QUERY ERROR] Exception in get_realtime_features: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error executing realtime query.")
     finally:
         if conn:
             release_pooled_connection(conn)

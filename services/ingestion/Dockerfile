@@ -11,7 +11,7 @@ RUN useradd -m -u 10001 appuser
 COPY requirements.txt .
 RUN pip install --default-timeout=1000 --retries=10 --no-cache-dir -r requirements.txt
 
-COPY ingest.py .
+COPY ingest.py stream_producer.py ./
 RUN chown -R appuser:appuser /app
 
 USER appuser

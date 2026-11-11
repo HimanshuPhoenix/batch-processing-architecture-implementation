@@ -64,7 +64,7 @@ services:
           memory: 1G
 
 
-  # 3. Data Ingestion Microservice (Python ETL)
+  #* 3. Data Ingestion Microservice (Python ETL)
 
   ingestion:
     build:
@@ -95,8 +95,15 @@ services:
     depends_on:
       ingestion:
         condition: service_completed_successfully
+      spark-master:
+        condition: service_started
+      spark-worker:
+        condition: service_started
       postgres:
         condition: service_healthy
+    environment:
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - PYSPARK_SUBMIT_ARGS=--conf spark.cores.max=1 --conf spark.executor.cores=1 --conf spark.executor.memory=512m pyspark-shell
     env_file:
       - .env
     networks:
@@ -136,3 +143,103 @@ services:
         limits:
           cpus: '1.0'
           memory: 512M
+
+# 6. Apache Kafka Broker (KRaft Mode - ZooKeeper-less)
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: de_kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT'
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:9092'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:9093'
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_FLUSH_INTERVAL_MESSAGES: 10000
+      KAFKA_HEAP_OPTS: '-Xmx512m -Xms256m'
+    networks:
+      - data-net
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-cluster.sh", "cluster-id", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
+
+  # 7. Multi-Node Spark Master
+  spark-master:
+    image: apache/spark:3.5.0
+    container_name: de_spark_master
+    restart: unless-stopped
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master", "--host", "spark-master", "--port", "7077", "--webui-port", "8080"]
+    ports:
+      - "7077:7077"   # Spark Master RPC
+      - "8085:8080"   # Spark Master Web UI
+    networks:
+      - data-net
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
+
+  # 8. Multi-Node Spark Worker (Scalable)
+  spark-worker:
+    image: apache/spark:3.5.0
+    container_name: de_spark_worker_1
+    restart: unless-stopped
+    depends_on:
+      - spark-master
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077", "--webui-port", "8081"]
+    environment:
+      - SPARK_WORKER_MEMORY=1536M
+      - SPARK_WORKER_CORES=2
+    networks:
+      - data-net
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+
+# 9. Real-Time Streaming Speed Layer (Spark Structured Streaming)
+
+  spark-streaming:
+    build:
+      context: ./services/spark_streaminglayer
+    container_name: de_spark_streaming
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      spark-master:
+        condition: service_started
+      spark-worker:
+        condition: service_started
+    environment:
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - PYSPARK_SUBMIT_ARGS=--conf spark.cores.max=1 --conf spark.executor.cores=1 --conf spark.executor.memory=512m pyspark-shell
+    env_file:
+      - .env
+    networks:
+      - data-net
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 2G
