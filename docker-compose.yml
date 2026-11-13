@@ -25,16 +25,16 @@ services:
     networks:
       - data-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U db_user -d feature_store"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-db_user} -d ${POSTGRES_DB:-feature_store}"]
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 30s
     deploy:
       resources:
         limits:
           cpus: '1.0'
           memory: 512M
-
   # 2. Local S3-Compatible Object Store (Pinned MinIO Release)
 
   minio:
