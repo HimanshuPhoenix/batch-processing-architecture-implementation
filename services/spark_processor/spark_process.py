@@ -37,8 +37,12 @@ def create_spark_session():
         SparkSession.builder
         .appName("QuarterlyFeatureAggregator")
         .master(SPARK_MASTER_URL)
-        .config("spark.driver.memory", "2g")
-        .config("spark.sql.shuffle.partitions", "8")
+        .config("spark.driver.host", os.getenv("SPARK_DRIVER_HOST", "spark-processor"))
+        .config("spark.driver.bindAddress", "0.0.0.0")
+        .config("spark.driver.port", "7078")
+        .config("spark.blockManager.port", "7079")
+        .config("spark.driver.memory", "1g")
+        .config("spark.sql.shuffle.partitions", "2")
         .config("spark.sql.parquet.datetimeRebaseModeInRead", "CORRECTED")
         .config("spark.sql.parquet.int96RebaseModeInRead", "CORRECTED")
         .config("spark.hadoop.fs.s3a.endpoint", s3a_endpoint)
@@ -116,7 +120,7 @@ def process_batch_aggregations():
     print(f"[SPARK] Reading partitioned Parquet data directly from '{s3_path}' via native S3A connector...")
     
     try:
-        spark_df = spark.read.option("recursiveFileLookup", "true").parquet(s3_path)
+        spark_df = spark.read.parquet(s3_path)
     except Exception as e:
         print(f"[ERROR] Failed to read Parquet files from '{s3_path}': {e}")
         sys.exit(1)

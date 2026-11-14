@@ -142,7 +142,8 @@ def upload_partitioned_to_minio(df, minio_client):
         partition_paths.append(object_name)
 
     print(f"[MINIO] Uploaded batch across {len(partition_paths)} year/month partitions.")
-    return batch_id, f"yellow_taxi_2023/({len(partition_paths)} partitions)/{batch_id}.parquet"
+    #return batch_id, f"yellow_taxi_2023/({len(partition_paths)} partitions)/{batch_id}.parquet"
+    return batch_id, "yellow_taxi_2023/"
 
 def log_to_postgres(batch_id, records_count, s3_path):
     """Logs batch execution metadata to PostgreSQL audit table with retries."""

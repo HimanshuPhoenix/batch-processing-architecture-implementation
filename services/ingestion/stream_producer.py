@@ -72,8 +72,9 @@ def stream_events():
     logger.info(f"Streaming real-time events to topic '{KAFKA_TOPIC}' at ~{EVENTS_PER_SECOND} events/sec...")
 
     event_count = 0
+    max_events = int(os.getenv("MAX_EVENTS", "10000")) #stop after maximum events to reduce disk load in testing.
     try:
-        while True:
+        while event_count<max_events:
             event = generate_taxi_trip_event()
             producer.send(KAFKA_TOPIC, value=event)
             event_count += 1
@@ -81,6 +82,7 @@ def stream_events():
                 producer.flush()
                 logger.info(f"Published {event_count} events to topic '{KAFKA_TOPIC}'. Latest: Vendor={event['vendor_id']}, Fare=${event['fare_amount']}")
             time.sleep(sleep_interval)
+        logger.info(f"Maximum event limit reached: {max_events}")
     except KeyboardInterrupt:
         logger.info("Streaming producer interrupted by user.")
     finally:

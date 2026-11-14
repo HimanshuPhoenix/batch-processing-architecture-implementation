@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS realtime_feature_aggregations (
     live_trips INT NOT NULL,
     live_avg_fare NUMERIC(10, 2),
     live_avg_distance NUMERIC(10, 2),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unique_vendor_window UNIQUE (vendor_id, window_start, window_end)
 );
 
 -- 4. Indexes for Query Performance & Low-Latency API Lookups

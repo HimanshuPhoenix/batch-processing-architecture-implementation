@@ -6,6 +6,8 @@ aggregations with watermarking, and writes streaming metrics into PostgreSQL.
 import os
 import sys
 import logging
+import psycopg2 
+from psycopg2.extras import execute_batch
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
@@ -29,33 +31,57 @@ POSTGRES_DB = os.getenv("POSTGRES_DB", "feature_store")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "db_user")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "db_password")
 SPARK_MASTER_URL = os.getenv("SPARK_MASTER_URL", "spark://spark-master:7077")
+CHECKPOINT_DIR = os.getenv("CHECKPOINT_DIR", "/tmp/spark_checkpoints/streaming_layer")
 
 
 def create_spark_streaming_session():
-    """Initializes Spark Session configured with Kafka & PostgreSQL JDBC connectors."""
+    """Initializes Spark Session configured with Kafka & PostgreSQL JDBC connectors and driver network bindings."""
     logger.info("Initializing Spark Structured Streaming Session...")
     spark = (
         SparkSession.builder
         .appName("SpeedLayer-Streaming")
         .master(SPARK_MASTER_URL)
+        .config("spark.driver.host", os.getenv("SPARK_DRIVER_HOST", "spark-streaming"))
+        .config("spark.driver.bindAddress", "0.0.0.0")
+        .config("spark.driver.port", "7088")
+        .config("spark.blockManager.port", "7089")
         .config(
             "spark.jars.packages",
             "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.postgresql:postgresql:42.6.0"
         )
-        .config("spark.sql.shuffle.partitions", "2")  # Scaled for local development
+        .config("spark.sql.shuffle.partitions", "2")
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")
     return spark
 
+UPSERT_REALTIME_SQL = """
+    INSERT INTO realtime_feature_aggregations (
+        vendor_id,
+        window_start,
+        window_end,
+        live_trips,
+        live_avg_fare,
+        live_avg_distance,
+        created_at
+    )
+    VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+    ON CONFLICT (vendor_id, window_start, window_end)
+    DO UPDATE SET
+        live_trips = EXCLUDED.live_trips,
+        live_avg_fare = EXCLUDED.live_avg_fare,
+        live_avg_distance = EXCLUDED.live_avg_distance,
+        created_at = CURRENT_TIMESTAMP;
+"""
 
 def write_streaming_batch_to_postgres(batch_df, batch_id):
     """
-    ForeachBatch micro-batch sink writing aggregated window features into PostgreSQL.
+    ForeachBatch micro-batch sink writing aggregated window features into PostgreSQL
+    using an idempotent ON CONFLICT (vendor_id, window_start, window_end) DO UPDATE (UPSERT).
     """
     record_count = batch_df.count()
     if record_count > 0:
-        logger.info(f"Processing micro-batch {batch_id}: writing {record_count} windowed aggregations to PostgreSQL...")
+        logger.info(f"Processing micro-batch {batch_id}: writing {record_count} windowed aggregations to PostgreSQL (idempotent UPSERT)...")
         flat_df = batch_df.select(
             F.col("vendor_id"),
             F.col("window.start").cast("timestamp").alias("window_start"),
@@ -64,19 +90,38 @@ def write_streaming_batch_to_postgres(batch_df, batch_id):
             F.col("live_avg_fare"),
             F.col("live_avg_distance")
         )
-        jdbc_url = f"jdbc:postgresql://{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
-        (
-            flat_df.write
-            .format("jdbc")
-            .option("url", jdbc_url)
-            .option("dbtable", "realtime_feature_aggregations")
-            .option("user", POSTGRES_USER)
-            .option("password", POSTGRES_PASSWORD)
-            .option("driver", "org.postgresql.Driver")
-            .mode("append")
-            .save()
+
+        rows = flat_df.collect()
+        params = [
+            (
+                row["vendor_id"],
+                row["window_start"],
+                row["window_end"],
+                row["live_trips"],
+                float(row["live_avg_fare"]) if row["live_avg_fare"] is not None else None,
+                float(row["live_avg_distance"]) if row["live_avg_distance"] is not None else None
+            )
+            for row in rows
+        ]
+
+        conn = psycopg2.connect(
+            host=POSTGRES_HOST,
+            port=POSTGRES_PORT,
+            dbname=POSTGRES_DB,
+            user=POSTGRES_USER,
+            password=POSTGRES_PASSWORD
         )
-        logger.info(f"Micro-batch {batch_id} successfully persisted to PostgreSQL.")
+        try:
+            with conn.cursor() as cur:
+                execute_batch(cur, UPSERT_REALTIME_SQL, params)
+            conn.commit()
+            logger.info(f"Micro-batch {batch_id} successfully upserted {len(params)} records into PostgreSQL.")
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Error persisting micro-batch {batch_id} to PostgreSQL: {e}")
+            raise e
+        finally:
+            conn.close()
 
 
 def main():
@@ -130,12 +175,13 @@ def main():
         )
     )
 
-    logger.info("Starting streaming sink with 10-second processing trigger...")
+    logger.info("Starting streaming sink with 10-second processing trigger (checkpoint: {CHECKPOINT_DIR})...")
     query = (
         windowed_features.writeStream
         .foreachBatch(write_streaming_batch_to_postgres)
         .outputMode("update")
         .trigger(processingTime="10 seconds")
+        .option("checkpointLocation", CHECKPOINT_DIR)
         .start()
     )
 

@@ -5,6 +5,7 @@ networks:
 volumes:
   postgres_data:
   minio_data:
+  spark_checkpoints:
 
 services:
   # 1. Relational Metadata & Feature Store (PostgreSQL)
@@ -89,6 +90,7 @@ services:
   # 4. Batch Processing Engine (Apache Spark / PySpark)
 
   spark-processor:
+    image: ${SPARK_IMAGE:-apache/spark:3.5.0}
     build:
       context: ./services/spark_processor
     container_name: de_spark_processor
@@ -96,13 +98,14 @@ services:
       ingestion:
         condition: service_completed_successfully
       spark-master:
-        condition: service_started
+        condition: service_healthy
       spark-worker:
-        condition: service_started
+        condition: service_healthy
       postgres:
         condition: service_healthy
     environment:
       - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_DRIVER_HOST=spark-processor
       - PYSPARK_SUBMIT_ARGS=--conf spark.cores.max=1 --conf spark.executor.cores=1 --conf spark.executor.memory=512m pyspark-shell
     env_file:
       - .env
@@ -186,10 +189,16 @@ services:
     restart: unless-stopped
     command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master", "--host", "spark-master", "--port", "7077", "--webui-port", "8080"]
     ports:
-      - "7077:7077"   # Spark Master RPC
-      - "8085:8080"   # Spark Master Web UI
+      - "7077:7077"
+      - "8085:8080"
     networks:
       - data-net
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s = socket.socket(); s.connect(('127.0.0.1', 8080)); s.close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     deploy:
       resources:
         limits:
@@ -202,13 +211,20 @@ services:
     container_name: de_spark_worker_1
     restart: unless-stopped
     depends_on:
-      - spark-master
+      spark-master:
+        condition: service_healthy
     command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077", "--webui-port", "8081"]
     environment:
       - SPARK_WORKER_MEMORY=1536M
       - SPARK_WORKER_CORES=2
     networks:
       - data-net
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s = socket.socket(); s.connect(('127.0.0.1', 8081)); s.close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     deploy:
       resources:
         limits:
@@ -218,24 +234,33 @@ services:
 # 9. Real-Time Streaming Speed Layer (Spark Structured Streaming)
 
   spark-streaming:
+    image: ${SPARK_IMAGE:-apache/spark:3.5.0}
     build:
       context: ./services/spark_streaminglayer
     container_name: de_spark_streaming
     restart: unless-stopped
     depends_on:
+      init-checkpoint-volume:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
       postgres:
         condition: service_healthy
       spark-master:
-        condition: service_started
+        condition: service_healthy
       spark-worker:
-        condition: service_started
+        condition: service_healthy
     environment:
       - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_DRIVER_HOST=spark-streaming
+      - CHECKPOINT_DIR=/checkpoints/taxi-trip-speed-layer
       - PYSPARK_SUBMIT_ARGS=--conf spark.cores.max=1 --conf spark.executor.cores=1 --conf spark.executor.memory=512m pyspark-shell
+    profiles:
+      - streaming
     env_file:
       - .env
+    volumes:
+      - spark_checkpoints:/checkpoints
     networks:
       - data-net
     deploy:
@@ -243,3 +268,51 @@ services:
         limits:
           cpus: '1.5'
           memory: 2G
+
+# 10 The Stream Producer Service
+  stream-producer:
+    build:
+      context: ./services/ingestion
+    container_name: de_stream_producer
+    command: ["python", "stream_producer.py"]
+    restart: "no"   # Do not endlessly restart if manually stopped
+    profiles:
+      - streaming   # Only starts when explicitly called or with --profile streaming
+    depends_on:
+      kafka:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_TOPIC: taxi-trips-stream
+      EVENTS_PER_SECOND: 1
+      MAX_EVENTS: 10000
+    networks:
+      - data-net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+# 11 Permission Initializer for Spark Checkpoint Volume
+  init-checkpoint-volume:
+    image: alpine:3.22
+    container_name: de_init_checkpoint
+    user: root
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        echo "Setting checkpoint permissions for UID=${SPARK_UID}, GID=${SPARK_GID}"
+        chown -R "${SPARK_UID}:${SPARK_GID}" /checkpoints
+        chmod -R 775 /checkpoints
+        echo "Checkpoint volume initialized successfully."
+    environment:
+      SPARK_UID: ${SPARK_UID:?SPARK_UID must be provided}
+      SPARK_GID: ${SPARK_GID:?SPARK_GID must be provided}
+    volumes:
+      - spark_checkpoints:/checkpoints
+    restart: "no"
